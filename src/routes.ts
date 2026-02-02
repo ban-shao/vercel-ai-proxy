@@ -19,6 +19,13 @@ function shouldCooldownKeyByErrorMessage(message?: string): boolean {
   return m.includes('rate') || m.includes('limit') || m.includes('quota') || m.includes('429');
 }
 
+function matchesProvider(modelId: unknown, providerFilter?: string): boolean {
+  if (!providerFilter) return true;
+  const p = providerFilter.toLowerCase().replace(/\/+$/, '');
+  const id = String(modelId).toLowerCase();
+  return id === p || id.startsWith(`${p}/`);
+}
+
 /**
  * GET /health - 健康检查
  */
@@ -62,10 +69,7 @@ router.get('/v1/models', async (req: Request, res: Response) => {
 
     // 检查缓存
     if (!refresh && modelsCache && Date.now() - modelsCacheTime < CACHE_TTL) {
-      let models = modelsCache;
-      if (providerFilter) {
-        models = models.filter((m) => String(m.id).toLowerCase().startsWith(providerFilter));
-      }
+      const models = providerFilter ? modelsCache.filter((m) => matchesProvider(m.id, providerFilter)) : modelsCache;
       return res.json({ object: 'list', data: models });
     }
 
@@ -84,10 +88,9 @@ router.get('/v1/models', async (req: Request, res: Response) => {
           modelsCacheTime = Date.now();
           logger.info(`[MODELS] 从上游获取了 ${modelsCache.length} 个模型`);
 
-          let models = modelsCache;
-          if (providerFilter) {
-            models = models.filter((m) => String(m.id).toLowerCase().startsWith(providerFilter));
-          }
+          const models = providerFilter
+            ? modelsCache.filter((m) => matchesProvider(m.id, providerFilter))
+            : modelsCache;
           return res.json({ object: 'list', data: models });
         }
 
@@ -107,7 +110,7 @@ router.get('/v1/models', async (req: Request, res: Response) => {
     }));
 
     if (providerFilter) {
-      models = models.filter((m) => String(m.id).toLowerCase().startsWith(providerFilter));
+      models = models.filter((m) => matchesProvider(m.id, providerFilter));
     }
 
     res.json({ object: 'list', data: models });
@@ -119,8 +122,11 @@ router.get('/v1/models', async (req: Request, res: Response) => {
 
 /**
  * GET /v1/models/:modelId - 获取单个模型
+ *
+ * NOTE: AI Gateway 的模型 ID 可能包含斜杠（例如 openai/gpt-4o），
+ * Express 需要使用 :modelId(*) 才能匹配。
  */
-router.get('/v1/models/:modelId', async (req: Request, res: Response) => {
+router.get('/v1/models/:modelId(*)', async (req: Request, res: Response) => {
   try {
     const modelId = req.params.modelId;
 
@@ -206,9 +212,53 @@ router.post('/v1/chat/completions', async (req: Request, res: Response) => {
 
       const requestId = `chatcmpl-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 
+      let closed = false;
+      req.on('close', () => {
+        closed = true;
+      });
+
       try {
+        // 一些客户端需要第一个 chunk 带 role
+        const roleChunk = {
+          id: requestId,
+          object: 'chat.completion.chunk',
+          created: Math.floor(Date.now() / 1000),
+          model: normalizedModel,
+          choices: [
+            {
+              index: 0,
+              delta: { role: 'assistant' },
+              finish_reason: null,
+            },
+          ],
+        };
+        res.write(`data: ${JSON.stringify(roleChunk)}\n\n`);
+
         for await (const chunk of result.stream) {
-          const data = {
+          if (closed || res.writableEnded || res.destroyed) {
+            break;
+          }
+
+          if (chunk) {
+            const data = {
+              id: requestId,
+              object: 'chat.completion.chunk',
+              created: Math.floor(Date.now() / 1000),
+              model: normalizedModel,
+              choices: [
+                {
+                  index: 0,
+                  delta: { content: chunk },
+                  finish_reason: null,
+                },
+              ],
+            };
+            res.write(`data: ${JSON.stringify(data)}\n\n`);
+          }
+        }
+
+        if (!closed && !res.writableEnded && !res.destroyed) {
+          const finalData = {
             id: requestId,
             object: 'chat.completion.chunk',
             created: Math.floor(Date.now() / 1000),
@@ -216,50 +266,41 @@ router.post('/v1/chat/completions', async (req: Request, res: Response) => {
             choices: [
               {
                 index: 0,
-                delta: { content: chunk },
-                finish_reason: null,
+                delta: {},
+                finish_reason: 'stop',
               },
             ],
           };
-          res.write(`data: ${JSON.stringify(data)}\n\n`);
+          res.write(`data: ${JSON.stringify(finalData)}\n\n`);
+          res.write('data: [DONE]\n\n');
+
+          keyManager.markKeySuccess(apiKey);
         }
-
-        const finalData = {
-          id: requestId,
-          object: 'chat.completion.chunk',
-          created: Math.floor(Date.now() / 1000),
-          model: normalizedModel,
-          choices: [
-            {
-              index: 0,
-              delta: {},
-              finish_reason: 'stop',
-            },
-          ],
-        };
-        res.write(`data: ${JSON.stringify(finalData)}\n\n`);
-        res.write('data: [DONE]\n\n');
-
-        keyManager.markKeySuccess(apiKey);
       } catch (streamError: any) {
         logger.error('流式响应错误:', streamError?.message);
 
-        // 尝试发送错误
-        const errorData = {
-          id: requestId,
-          object: 'chat.completion.chunk',
-          created: Math.floor(Date.now() / 1000),
-          model: normalizedModel,
-          choices: [
-            {
-              index: 0,
-              delta: { content: `\n\n[Error: ${streamError?.message || 'stream_error'}]` },
-              finish_reason: 'error',
-            },
-          ],
-        };
-        res.write(`data: ${JSON.stringify(errorData)}\n\n`);
-        res.write('data: [DONE]\n\n');
+        if (!closed && !res.writableEnded && !res.destroyed) {
+          // 尝试发送错误
+          const errorData = {
+            id: requestId,
+            object: 'chat.completion.chunk',
+            created: Math.floor(Date.now() / 1000),
+            model: normalizedModel,
+            choices: [
+              {
+                index: 0,
+                delta: { content: `\n\n[Error: ${streamError?.message || 'stream_error'}]` },
+                finish_reason: 'error',
+              },
+            ],
+          };
+          res.write(`data: ${JSON.stringify(errorData)}\n\n`);
+          res.write('data: [DONE]\n\n');
+        }
+
+        if (shouldCooldownKeyByErrorMessage(streamError?.message)) {
+          keyManager.markKeyFailed(apiKey);
+        }
       }
 
       return res.end();
@@ -360,8 +401,17 @@ router.post('/v1/completions', async (req: Request, res: Response) => {
 
       const requestId = `cmpl-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 
+      let closed = false;
+      req.on('close', () => {
+        closed = true;
+      });
+
       try {
         for await (const chunk of result.stream) {
+          if (closed || res.writableEnded || res.destroyed) {
+            break;
+          }
+
           const data = {
             id: requestId,
             object: 'text_completion',
@@ -379,26 +429,32 @@ router.post('/v1/completions', async (req: Request, res: Response) => {
           res.write(`data: ${JSON.stringify(data)}\n\n`);
         }
 
-        const finalData = {
-          id: requestId,
-          object: 'text_completion',
-          created: Math.floor(Date.now() / 1000),
-          model: normalizedModel,
-          choices: [
-            {
-              text: '',
-              index: 0,
-              logprobs: null,
-              finish_reason: 'stop',
-            },
-          ],
-        };
-        res.write(`data: ${JSON.stringify(finalData)}\n\n`);
-        res.write('data: [DONE]\n\n');
+        if (!closed && !res.writableEnded && !res.destroyed) {
+          const finalData = {
+            id: requestId,
+            object: 'text_completion',
+            created: Math.floor(Date.now() / 1000),
+            model: normalizedModel,
+            choices: [
+              {
+                text: '',
+                index: 0,
+                logprobs: null,
+                finish_reason: 'stop',
+              },
+            ],
+          };
+          res.write(`data: ${JSON.stringify(finalData)}\n\n`);
+          res.write('data: [DONE]\n\n');
 
-        keyManager.markKeySuccess(apiKey);
+          keyManager.markKeySuccess(apiKey);
+        }
       } catch (streamError: any) {
         logger.error('completions 流式响应错误:', streamError?.message);
+
+        if (shouldCooldownKeyByErrorMessage(streamError?.message)) {
+          keyManager.markKeyFailed(apiKey);
+        }
       }
 
       return res.end();
