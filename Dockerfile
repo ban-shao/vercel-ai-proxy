@@ -4,7 +4,8 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm ci
+# NOTE: repo does not ship package-lock.json, so cannot use `npm ci`
+RUN npm install
 
 COPY tsconfig.json ./
 COPY src ./src
@@ -18,7 +19,7 @@ ENV NODE_ENV=production
 ENV PORT=3001
 
 COPY package*.json ./
-RUN npm ci --omit=dev
+RUN npm install --omit=dev
 
 COPY --from=builder /app/dist ./dist
 
