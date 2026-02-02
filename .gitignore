@@ -3,18 +3,25 @@ node_modules/
 
 # Build output
 dist/
+build/
 
 # Environment
 .env
 .env.local
+.env.*.local
 
 # Logs
 logs/
 *.log
+npm-debug.log*
+
+# Data files
+data/keys/*.txt
+!data/keys/.gitkeep
 
 # IDE
-.idea/
 .vscode/
+.idea/
 *.swp
 *.swo
 
@@ -22,6 +29,8 @@ logs/
 .DS_Store
 Thumbs.db
 
-# Data files (keep structure)
-data/keys/*.txt
-!data/keys/.gitkeep
+# TypeScript
+*.tsbuildinfo
+
+# Test
+coverage/
