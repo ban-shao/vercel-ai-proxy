@@ -70,7 +70,7 @@ KEYS_FILE=data/keys/keys.txt
 KEY_COOLDOWN_HOURS=24
 
 # 日志级别
-aLOG_LEVEL=info
+LOG_LEVEL=info
 EOF
     echo "✓ 配置文件已创建"
     echo "  AUTH_KEY: $AUTH_KEY"
