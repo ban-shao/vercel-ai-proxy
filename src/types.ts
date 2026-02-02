@@ -6,7 +6,7 @@ export interface ChatCompletionRequest {
   temperature?: number;
   top_p?: number;
   max_tokens?: number;
-  
+
   // 扩展参数 - 思考/推理
   reasoning_effort?: 'low' | 'medium' | 'high';
   thinking?: {
@@ -15,7 +15,7 @@ export interface ChatCompletionRequest {
   };
   enable_thinking?: boolean;
   thinking_budget?: number;
-  
+
   // 其他扩展参数
   [key: string]: any;
 }
@@ -33,8 +33,15 @@ export interface ContentPart {
   };
 }
 
-// Provider 类型
+// Provider 类型（本项目主要为 4 个 provider 做参数转换；其他 provider 将按“未知”处理）
 export type ProviderType = 'anthropic' | 'openai' | 'google' | 'xai' | 'unknown';
+export type Provider = ProviderType;
+
+export interface Model {
+  id: string;
+  name: string;
+  provider: ProviderType;
+}
 
 // 密钥状态
 export interface KeyStatus {

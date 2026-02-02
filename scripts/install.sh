@@ -52,7 +52,7 @@ echo "[5/5] 创建配置文件..."
 if [ ! -f "$INSTALL_DIR/.env" ]; then
     # 生成随机 AUTH_KEY
     AUTH_KEY=$(openssl rand -hex 16)
-    
+
     cat > $INSTALL_DIR/.env << EOF
 # 服务端口
 PORT=3001
@@ -60,7 +60,7 @@ PORT=3001
 # 认证密钥（访问此代理服务需要的密钥）
 AUTH_KEY=$AUTH_KEY
 
-# 上游 Vercel AI Gateway 地址
+# 上游 Vercel AI Gateway Host（建议仅写 host，不带 /v1 等路径）
 UPSTREAM_URL=https://ai-gateway.vercel.sh
 
 # 密钥文件路径
@@ -70,7 +70,7 @@ KEYS_FILE=data/keys/keys.txt
 KEY_COOLDOWN_HOURS=24
 
 # 日志级别
-LOG_LEVEL=info
+aLOG_LEVEL=info
 EOF
     echo "✓ 配置文件已创建"
     echo "  AUTH_KEY: $AUTH_KEY"

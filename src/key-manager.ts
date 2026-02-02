@@ -21,14 +21,15 @@ class KeyManager {
       }
 
       const content = fs.readFileSync(config.keysFile, 'utf-8');
-      const keyLines = content.split('\n')
-        .map(line => line.trim())
-        .filter(line => line && !line.startsWith('#'));
+      const keyLines = content
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line && !line.startsWith('#'));
 
       // 保留现有密钥状态
-      const existingKeys = new Map(this.keys.map(k => [k.key, k]));
-      
-      this.keys = keyLines.map(key => {
+      const existingKeys = new Map(this.keys.map((k) => [k.key, k]));
+
+      this.keys = keyLines.map((key) => {
         const existing = existingKeys.get(key);
         return existing || { key, failCount: 0 };
       });
@@ -54,7 +55,6 @@ class KeyManager {
     }
 
     const now = new Date();
-    const cooldownMs = config.cooldownHours * 60 * 60 * 1000;
 
     // 尝试找到可用的密钥
     for (let i = 0; i < this.keys.length; i++) {
@@ -73,21 +73,23 @@ class KeyManager {
 
     // 所有密钥都在冷却中，返回第一个
     logger.warn('所有密钥都在冷却中，强制使用第一个');
-    this.currentIndex = 1;
+    this.currentIndex = this.keys.length > 1 ? 1 : 0;
     return this.keys[0].key;
   }
 
   markKeyFailed(key: string) {
-    const keyStatus = this.keys.find(k => k.key === key);
+    const keyStatus = this.keys.find((k) => k.key === key);
     if (keyStatus) {
       keyStatus.failCount++;
-      keyStatus.cooldownUntil = new Date(Date.now() + config.cooldownHours * 60 * 60 * 1000);
+      keyStatus.cooldownUntil = new Date(
+        Date.now() + config.cooldownHours * 60 * 60 * 1000,
+      );
       logger.warn(`密钥标记为冷却: ${key.substring(0, 10)}...`);
     }
   }
 
   markKeySuccess(key: string) {
-    const keyStatus = this.keys.find(k => k.key === key);
+    const keyStatus = this.keys.find((k) => k.key === key);
     if (keyStatus) {
       keyStatus.failCount = 0;
       keyStatus.cooldownUntil = undefined;
@@ -96,7 +98,7 @@ class KeyManager {
 
   getStats() {
     const now = new Date();
-    const available = this.keys.filter(k => !k.cooldownUntil || k.cooldownUntil <= now).length;
+    const available = this.keys.filter((k) => !k.cooldownUntil || k.cooldownUntil <= now).length;
     return {
       total: this.keys.length,
       available,

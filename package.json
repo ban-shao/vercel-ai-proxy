@@ -1,7 +1,7 @@
 {
   "name": "vercel-ai-proxy",
-  "version": "1.0.0",
-  "description": "Vercel AI Gateway 代理服务 - 使用官方 @ai-sdk",
+  "version": "1.0.1",
+  "description": "Vercel AI Gateway 代理服务 - 使用官方 AI SDK Gateway",
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
@@ -11,11 +11,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^1.0.0",
-    "@ai-sdk/google": "^1.0.0",
-    "@ai-sdk/openai": "^1.0.0",
-    "@ai-sdk/xai": "^1.0.0",
-    "ai": "^4.0.0",
+    "ai": "^5.0.0",
     "dotenv": "^16.3.1",
     "express": "^4.18.2"
   },

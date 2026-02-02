@@ -5,15 +5,17 @@ import { keyManager } from './key-manager';
 
 async function main() {
   logger.info('============================================================');
-  logger.info('Vercel AI Proxy - v1.0.0 (TypeScript + AI SDK)');
+  logger.info('Vercel AI Proxy - v1.0.1 (TypeScript + AI SDK Gateway)');
   logger.info('============================================================');
   logger.info(`监听端口: ${config.port}`);
-  logger.info(`上游地址: ${config.upstreamUrl}`);
+  logger.info(`上游 Host: ${config.upstreamUrl}`);
+  logger.info(`上游 OpenAI Compatible Base: ${config.upstreamOpenAIBaseUrl}`);
+  logger.info(`上游 AI SDK Base: ${config.upstreamAiSdkBaseUrl}`);
   logger.info(`已加载密钥: ${keyManager.getStats().total} 个`);
   logger.info('============================================================');
-  
+
   const app = createServer();
-  
+
   app.listen(config.port, () => {
     logger.info(`服务启动成功，监听端口 ${config.port}`);
   });
