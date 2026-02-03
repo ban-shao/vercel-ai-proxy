@@ -119,8 +119,11 @@ router.get('/v1/models', async (req: Request, res: Response) => {
 
 /**
  * GET /v1/models/:modelId - 获取单个模型
+ *
+ * 注意：AI Gateway 的 model id 形如 `openai/gpt-4o`，包含 `/`。
+ * Express 默认的 `:param` 无法匹配包含 `/` 的参数，所以这里使用 `:modelId(*)`。
  */
-router.get('/v1/models/:modelId', async (req: Request, res: Response) => {
+router.get('/v1/models/:modelId(*)', async (req: Request, res: Response) => {
   try {
     const modelId = req.params.modelId;
 
@@ -206,8 +209,31 @@ router.post('/v1/chat/completions', async (req: Request, res: Response) => {
 
       const requestId = `chatcmpl-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 
+      let clientClosed = false;
+      req.on('close', () => {
+        clientClosed = true;
+      });
+
       try {
+        // 兼容性：部分 OpenAI 生态客户端要求首包带 role
+        const roleData = {
+          id: requestId,
+          object: 'chat.completion.chunk',
+          created: Math.floor(Date.now() / 1000),
+          model: normalizedModel,
+          choices: [
+            {
+              index: 0,
+              delta: { role: 'assistant' },
+              finish_reason: null,
+            },
+          ],
+        };
+        res.write(`data: ${JSON.stringify(roleData)}\n\n`);
+
         for await (const chunk of result.stream) {
+          if (clientClosed) break;
+
           const data = {
             id: requestId,
             object: 'chat.completion.chunk',
@@ -224,45 +250,52 @@ router.post('/v1/chat/completions', async (req: Request, res: Response) => {
           res.write(`data: ${JSON.stringify(data)}\n\n`);
         }
 
-        const finalData = {
-          id: requestId,
-          object: 'chat.completion.chunk',
-          created: Math.floor(Date.now() / 1000),
-          model: normalizedModel,
-          choices: [
-            {
-              index: 0,
-              delta: {},
-              finish_reason: 'stop',
-            },
-          ],
-        };
-        res.write(`data: ${JSON.stringify(finalData)}\n\n`);
-        res.write('data: [DONE]\n\n');
+        if (!clientClosed) {
+          const finalData = {
+            id: requestId,
+            object: 'chat.completion.chunk',
+            created: Math.floor(Date.now() / 1000),
+            model: normalizedModel,
+            choices: [
+              {
+                index: 0,
+                delta: {},
+                finish_reason: 'stop',
+              },
+            ],
+          };
+          res.write(`data: ${JSON.stringify(finalData)}\n\n`);
+          res.write('data: [DONE]\n\n');
 
-        keyManager.markKeySuccess(apiKey);
+          keyManager.markKeySuccess(apiKey);
+        }
       } catch (streamError: any) {
-        logger.error('流式响应错误:', streamError?.message);
+        if (!clientClosed) {
+          logger.error('流式响应错误:', streamError?.message);
 
-        // 尝试发送错误
-        const errorData = {
-          id: requestId,
-          object: 'chat.completion.chunk',
-          created: Math.floor(Date.now() / 1000),
-          model: normalizedModel,
-          choices: [
-            {
-              index: 0,
-              delta: { content: `\n\n[Error: ${streamError?.message || 'stream_error'}]` },
-              finish_reason: 'error',
-            },
-          ],
-        };
-        res.write(`data: ${JSON.stringify(errorData)}\n\n`);
-        res.write('data: [DONE]\n\n');
+          // 尝试发送错误
+          const errorData = {
+            id: requestId,
+            object: 'chat.completion.chunk',
+            created: Math.floor(Date.now() / 1000),
+            model: normalizedModel,
+            choices: [
+              {
+                index: 0,
+                delta: { content: `\n\n[Error: ${streamError?.message || 'stream_error'}]` },
+                finish_reason: 'error',
+              },
+            ],
+          };
+          res.write(`data: ${JSON.stringify(errorData)}\n\n`);
+          res.write('data: [DONE]\n\n');
+        }
       }
 
-      return res.end();
+      if (!res.writableEnded) {
+        return res.end();
+      }
+      return;
     }
 
     // 非流式响应
@@ -360,8 +393,15 @@ router.post('/v1/completions', async (req: Request, res: Response) => {
 
       const requestId = `cmpl-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 
+      let clientClosed = false;
+      req.on('close', () => {
+        clientClosed = true;
+      });
+
       try {
         for await (const chunk of result.stream) {
+          if (clientClosed) break;
+
           const data = {
             id: requestId,
             object: 'text_completion',
@@ -379,29 +419,36 @@ router.post('/v1/completions', async (req: Request, res: Response) => {
           res.write(`data: ${JSON.stringify(data)}\n\n`);
         }
 
-        const finalData = {
-          id: requestId,
-          object: 'text_completion',
-          created: Math.floor(Date.now() / 1000),
-          model: normalizedModel,
-          choices: [
-            {
-              text: '',
-              index: 0,
-              logprobs: null,
-              finish_reason: 'stop',
-            },
-          ],
-        };
-        res.write(`data: ${JSON.stringify(finalData)}\n\n`);
-        res.write('data: [DONE]\n\n');
+        if (!clientClosed) {
+          const finalData = {
+            id: requestId,
+            object: 'text_completion',
+            created: Math.floor(Date.now() / 1000),
+            model: normalizedModel,
+            choices: [
+              {
+                text: '',
+                index: 0,
+                logprobs: null,
+                finish_reason: 'stop',
+              },
+            ],
+          };
+          res.write(`data: ${JSON.stringify(finalData)}\n\n`);
+          res.write('data: [DONE]\n\n');
 
-        keyManager.markKeySuccess(apiKey);
+          keyManager.markKeySuccess(apiKey);
+        }
       } catch (streamError: any) {
-        logger.error('completions 流式响应错误:', streamError?.message);
+        if (!clientClosed) {
+          logger.error('completions 流式响应错误:', streamError?.message);
+        }
       }
 
-      return res.end();
+      if (!res.writableEnded) {
+        return res.end();
+      }
+      return;
     }
 
     // completions non-stream
