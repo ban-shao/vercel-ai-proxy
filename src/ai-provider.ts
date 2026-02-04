@@ -194,6 +194,24 @@ function buildXAIOptions(request: ChatCompletionRequest) {
   return Object.keys(options).length > 0 ? { xai: options } : undefined;
 }
 
+// 提取 token 数量（处理嵌套对象或直接数字）
+function extractTokenCount(value: any): number {
+  if (typeof value === 'number') {
+    return value;
+  }
+  if (value && typeof value === 'object') {
+    // Vercel AI SDK 返回格式: { total: number, noCache?: number, ... }
+    if (typeof value.total === 'number') {
+      return value.total;
+    }
+    // 尝试其他可能的字段名
+    if (typeof value.count === 'number') {
+      return value.count;
+    }
+  }
+  return 0;
+}
+
 // 主要的聊天完成函数
 export async function chatCompletion(
   request: ChatCompletionRequest,
@@ -261,14 +279,21 @@ export async function chatCompletion(
 
   const result = await generateText(params);
   
-  // 转换 usage 格式
-  const usage = result.usage ? {
-    promptTokens: (result.usage as any).promptTokens ?? (result.usage as any).inputTokens ?? 0,
-    completionTokens: (result.usage as any).completionTokens ?? (result.usage as any).outputTokens ?? 0,
-    totalTokens: (result.usage as any).totalTokens ?? 
-      ((result.usage as any).promptTokens ?? (result.usage as any).inputTokens ?? 0) + 
-      ((result.usage as any).completionTokens ?? (result.usage as any).outputTokens ?? 0),
-  } : undefined;
+  // 转换 usage 格式，处理嵌套对象
+  let usage: { promptTokens: number; completionTokens: number; totalTokens: number } | undefined;
+  
+  if (result.usage) {
+    const rawUsage = result.usage as any;
+    const promptTokens = extractTokenCount(rawUsage.promptTokens ?? rawUsage.inputTokens);
+    const completionTokens = extractTokenCount(rawUsage.completionTokens ?? rawUsage.outputTokens);
+    const totalTokens = extractTokenCount(rawUsage.totalTokens) || (promptTokens + completionTokens);
+    
+    usage = {
+      promptTokens,
+      completionTokens,
+      totalTokens,
+    };
+  }
 
   return {
     text: result.text,
