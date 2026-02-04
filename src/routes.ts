@@ -25,7 +25,7 @@ function shouldCooldownKeyByErrorMessage(message?: string): boolean {
 router.get('/health', (req: Request, res: Response) => {
   res.json({
     status: 'ok',
-    version: '1.0.1',
+    version: '1.1.0',
     upstream: {
       openai: config.upstreamOpenAIBaseUrl,
       ai_sdk: config.upstreamAiSdkBaseUrl,
@@ -50,6 +50,88 @@ router.get('/stats', (req: Request, res: Response) => {
     memory: process.memoryUsage(),
     keys: keyManager.getStats(),
   });
+});
+
+/**
+ * POST /admin/reload - 重新加载密钥文件（热加载）
+ */
+router.post('/admin/reload', (req: Request, res: Response) => {
+  // 验证授权
+  const authHeader = req.headers.authorization;
+  if (config.authKey) {
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: { message: 'Missing authorization', type: 'auth_error' } });
+    }
+    const token = authHeader.slice(7);
+    if (token !== config.authKey) {
+      return res.status(403).json({ error: { message: 'Invalid authorization', type: 'auth_error' } });
+    }
+  }
+
+  try {
+    keyManager.reloadKeys();
+    const stats = keyManager.getStats();
+    logger.info(`[ADMIN] 密钥已重新加载: ${stats.total} 个密钥`);
+    res.json({
+      message: '密钥已重新加载',
+      stats,
+    });
+  } catch (error: any) {
+    logger.error('[ADMIN] 重新加载密钥失败:', error?.message);
+    res.status(500).json({ error: { message: error?.message, type: 'api_error' } });
+  }
+});
+
+/**
+ * GET /admin/status - 获取详细密钥状态（需要认证）
+ */
+router.get('/admin/status', (req: Request, res: Response) => {
+  // 验证授权
+  const authHeader = req.headers.authorization;
+  if (config.authKey) {
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: { message: 'Missing authorization', type: 'auth_error' } });
+    }
+    const token = authHeader.slice(7);
+    if (token !== config.authKey) {
+      return res.status(403).json({ error: { message: 'Invalid authorization', type: 'auth_error' } });
+    }
+  }
+
+  res.json({
+    stats: keyManager.getStats(),
+    details: keyManager.getDetailedStatus(),
+  });
+});
+
+/**
+ * POST /admin/reset - 重置所有密钥状态（需要认证）
+ */
+router.post('/admin/reset', (req: Request, res: Response) => {
+  // 验证授权
+  const authHeader = req.headers.authorization;
+  if (config.authKey) {
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: { message: 'Missing authorization', type: 'auth_error' } });
+    }
+    const token = authHeader.slice(7);
+    if (token !== config.authKey) {
+      return res.status(403).json({ error: { message: 'Invalid authorization', type: 'auth_error' } });
+    }
+  }
+
+  try {
+    keyManager.resetAllKeys();
+    const stats = keyManager.getStats();
+    logger.info(`[ADMIN] 所有密钥状态已重置`);
+    res.json({
+      message: '所有密钥状态已重置',
+      stats,
+    });
+  } catch (error: any) {
+    logger.error('[ADMIN] 重置密钥状态失败:', error?.message);
+    res.status(500).json({ error: { message: error?.message, type: 'api_error' } });
+  }
 });
 
 /**
