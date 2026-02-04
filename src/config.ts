@@ -10,6 +10,9 @@ const upstreamHost = stripTrailingSlash(
   process.env.UPSTREAM_URL || 'https://ai-gateway.vercel.sh',
 );
 
+const schedulerFlag =
+  process.env.ENABLE_SCHEDULER ?? process.env.SCHEDULER_ENABLED;
+
 export const config = {
   port: parseInt(process.env.PORT || '3001', 10),
   authKey: process.env.AUTH_KEY || '',
@@ -37,7 +40,8 @@ export const config = {
   logLevel: process.env.LOG_LEVEL || 'info',
   logDir: process.env.LOG_DIR || './logs',
 
-  // 定时任务配置
-  enableScheduler: process.env.ENABLE_SCHEDULER !== 'false', // 默认启用
+  // 定时任务配置（优先 ENABLE_SCHEDULER，其次兼容 SCHEDULER_ENABLED，未配置时默认启用）
+  enableScheduler:
+    schedulerFlag === undefined ? true : schedulerFlag !== 'false',
   dailyTaskTime: process.env.DAILY_TASK_TIME || '00:00', // 每日任务执行时间 (HH:mm)
 };
