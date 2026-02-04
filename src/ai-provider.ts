@@ -1,4 +1,5 @@
-import { streamText, generateText, createGateway, type CoreMessage } from 'ai';
+import { streamText, generateText, type CoreMessage } from 'ai';
+import { createGateway } from '@ai-sdk/gateway';
 import { config } from './config';
 import { logger } from './logger';
 import type { ChatCompletionRequest, ProviderType, Message } from './types';
@@ -123,7 +124,10 @@ function buildAnthropicOptions(request: ChatCompletionRequest) {
   if (request.reasoning_effort) {
     options.thinking = {
       type: 'enabled',
-      budgetTokens: calculateThinkingBudget(request.reasoning_effort, request.max_tokens),
+      budgetTokens: calculateThinkingBudget(
+        request.reasoning_effort,
+        request.max_tokens,
+      ),
     };
   } else if (request.thinking) {
     options.thinking = {
@@ -141,14 +145,21 @@ function buildAnthropicOptions(request: ChatCompletionRequest) {
 }
 
 // 构建 OpenAI Provider Options
-function buildOpenAIOptions(request: ChatCompletionRequest, modelId: string) {
+function buildOpenAIOptions(
+  request: ChatCompletionRequest,
+  modelId: string,
+) {
   const options: Record<string, any> = {};
-  const bareModelId = modelId.includes('/') ? modelId.split('/').slice(1).join('/') : modelId;
+  const bareModelId = modelId.includes('/')
+    ? modelId.split('/').slice(1).join('/')
+    : modelId;
   const modelLower = bareModelId.toLowerCase();
 
   // 只有 o1/o3/gpt-5 等推理模型才支持 reasoningEffort
   const isReasoningModel =
-    modelLower.startsWith('o1') || modelLower.startsWith('o3') || modelLower.includes('gpt-5');
+    modelLower.startsWith('o1') ||
+    modelLower.startsWith('o3') ||
+    modelLower.includes('gpt-5');
 
   if (isReasoningModel && request.reasoning_effort) {
     options.reasoningEffort = request.reasoning_effort;
@@ -164,7 +175,10 @@ function buildGoogleOptions(request: ChatCompletionRequest) {
   // 处理思考参数
   if (request.reasoning_effort) {
     options.thinkingConfig = {
-      thinkingBudget: calculateThinkingBudget(request.reasoning_effort, request.max_tokens),
+      thinkingBudget: calculateThinkingBudget(
+        request.reasoning_effort,
+        request.max_tokens,
+      ),
       includeThoughts: true,
     };
   } else if (request.thinking?.type === 'enabled') {
@@ -220,7 +234,11 @@ export interface StreamResult {
 export interface StreamChunk {
   type: 'text' | 'reasoning' | 'done';
   content?: string;
-  usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
+  usage?: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  };
 }
 
 // 主要的聊天完成函数
@@ -231,7 +249,11 @@ export async function chatCompletion(
   stream?: AsyncIterable<StreamChunk>;
   text?: string;
   reasoning?: string;
-  usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
+  usage?: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  };
 }> {
   const modelId = ensureGatewayModelId(request.model);
   const providerType = detectProvider(modelId);
@@ -273,10 +295,34 @@ export async function chatCompletion(
   const params: any = {
     model: gateway(modelId),
     messages,
-    maxTokens: request.max_tokens,
-    temperature: request.temperature,
-    topP: request.top_p,
   };
+
+  // 只在为 number 时才传入，避免 null 等非法值触发 SDK 校验错误
+  if (typeof request.max_tokens === 'number') {
+    params.maxTokens = request.max_tokens;
+  }
+  if (typeof request.temperature === 'number') {
+    params.temperature = request.temperature;
+  }
+  if (typeof request.top_p === 'number') {
+    params.topP = request.top_p;
+  }
+
+  // 透传其余字段（排除已经处理的字段）
+  const excludedKeys = new Set([
+    'model',
+    'messages',
+    'stream',
+    'max_tokens',
+    'temperature',
+    'top_p',
+  ]);
+
+  for (const [key, value] of Object.entries(request)) {
+    if (excludedKeys.has(key)) continue;
+    if (value === undefined) continue;
+    params[key] = value;
+  }
 
   if (providerOptions) {
     params.providerOptions = providerOptions;
@@ -285,28 +331,41 @@ export async function chatCompletion(
   // 流式或非流式
   if (request.stream) {
     const result = await streamText(params);
-    
+
     // 创建一个生成器来处理流式响应
     async function* processStream(): AsyncIterable<StreamChunk> {
       let reasoningContent = '';
       let textContent = '';
-      
+
       // 使用 fullStream 来获取完整的流式数据（包括思考内容）
       for await (const part of result.fullStream) {
         if (part.type === 'reasoning') {
           // 思考内容
-          reasoningContent += part.textDelta || '';
-          yield { type: 'reasoning', content: part.textDelta || '' };
+          const delta =
+            (part as any).textDelta ||
+            (part as any).text ||
+            '';
+          if (!delta) continue;
+
+          reasoningContent += delta;
+          yield { type: 'reasoning', content: delta };
         } else if (part.type === 'text-delta') {
           // 正常文本内容
-          textContent += part.textDelta || '';
-          yield { type: 'text', content: part.textDelta || '' };
+          const delta = (part as any).textDelta ?? '';
+          if (!delta) continue;
+
+          textContent += delta;
+          yield { type: 'text', content: delta };
         } else if (part.type === 'finish') {
           // 流结束，返回 usage
           const rawUsage = (part as any).usage;
           if (rawUsage) {
-            const promptTokens = extractTokenCount(rawUsage.promptTokens ?? rawUsage.inputTokens);
-            const completionTokens = extractTokenCount(rawUsage.completionTokens ?? rawUsage.outputTokens);
+            const promptTokens = extractTokenCount(
+              rawUsage.promptTokens ?? rawUsage.inputTokens,
+            );
+            const completionTokens = extractTokenCount(
+              rawUsage.completionTokens ?? rawUsage.outputTokens,
+            );
             yield {
               type: 'done',
               usage: {
@@ -321,21 +380,33 @@ export async function chatCompletion(
         }
       }
     }
-    
+
     return { stream: processStream() };
   }
 
   const result = await generateText(params);
-  
+
   // 转换 usage 格式，处理嵌套对象
-  let usage: { promptTokens: number; completionTokens: number; totalTokens: number } | undefined;
-  
+  let usage:
+    | {
+        promptTokens: number;
+        completionTokens: number;
+        totalTokens: number;
+      }
+    | undefined;
+
   if (result.usage) {
     const rawUsage = result.usage as any;
-    const promptTokens = extractTokenCount(rawUsage.promptTokens ?? rawUsage.inputTokens);
-    const completionTokens = extractTokenCount(rawUsage.completionTokens ?? rawUsage.outputTokens);
-    const totalTokens = extractTokenCount(rawUsage.totalTokens) || (promptTokens + completionTokens);
-    
+    const promptTokens = extractTokenCount(
+      rawUsage.promptTokens ?? rawUsage.inputTokens,
+    );
+    const completionTokens = extractTokenCount(
+      rawUsage.completionTokens ?? rawUsage.outputTokens,
+    );
+    const totalTokens =
+      extractTokenCount(rawUsage.totalTokens) ||
+      promptTokens + completionTokens;
+
     usage = {
       promptTokens,
       completionTokens,
