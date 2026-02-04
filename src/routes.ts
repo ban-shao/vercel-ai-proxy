@@ -3,7 +3,7 @@ import { Readable } from 'node:stream';
 import { config } from './config';
 import { logger } from './logger';
 import { keyManager } from './key-manager';
-import { chatCompletion, ensureGatewayModelId } from './ai-provider';
+import { chatCompletion, ensureGatewayModelId, type StreamChunk } from './ai-provider';
 import { getSupportedModels } from './utils';
 import { billingChecker } from './billing-checker';
 import { keyRefresher } from './key-refresher';
@@ -447,6 +447,10 @@ router.post('/v1/chat/completions', async (req: Request, res: Response) => {
         clientClosed = true;
       });
 
+      // 收集思考内容和文本内容
+      let reasoningContent = '';
+      let hasStartedText = false;
+
       try {
         // 兼容性：部分 OpenAI 生态客户端要求首包带 role
         const roleData = {
@@ -467,39 +471,66 @@ router.post('/v1/chat/completions', async (req: Request, res: Response) => {
         for await (const chunk of result.stream) {
           if (clientClosed) break;
 
-          const data = {
-            id: requestId,
-            object: 'chat.completion.chunk',
-            created: Math.floor(Date.now() / 1000),
-            model: normalizedModel,
-            choices: [
-              {
-                index: 0,
-                delta: { content: chunk },
-                finish_reason: null,
-              },
-            ],
-          };
-          res.write(`data: ${JSON.stringify(data)}\n\n`);
+          if (chunk.type === 'reasoning') {
+            // 思考内容 - 发送到 reasoning_content 字段
+            reasoningContent += chunk.content || '';
+            const data = {
+              id: requestId,
+              object: 'chat.completion.chunk',
+              created: Math.floor(Date.now() / 1000),
+              model: normalizedModel,
+              choices: [
+                {
+                  index: 0,
+                  delta: { reasoning_content: chunk.content || '' },
+                  finish_reason: null,
+                },
+              ],
+            };
+            res.write(`data: ${JSON.stringify(data)}\n\n`);
+          } else if (chunk.type === 'text') {
+            // 正常文本内容
+            hasStartedText = true;
+            const data = {
+              id: requestId,
+              object: 'chat.completion.chunk',
+              created: Math.floor(Date.now() / 1000),
+              model: normalizedModel,
+              choices: [
+                {
+                  index: 0,
+                  delta: { content: chunk.content || '' },
+                  finish_reason: null,
+                },
+              ],
+            };
+            res.write(`data: ${JSON.stringify(data)}\n\n`);
+          } else if (chunk.type === 'done') {
+            // 流结束
+            const finalData = {
+              id: requestId,
+              object: 'chat.completion.chunk',
+              created: Math.floor(Date.now() / 1000),
+              model: normalizedModel,
+              choices: [
+                {
+                  index: 0,
+                  delta: {},
+                  finish_reason: 'stop',
+                },
+              ],
+              usage: chunk.usage ? {
+                prompt_tokens: chunk.usage.promptTokens,
+                completion_tokens: chunk.usage.completionTokens,
+                total_tokens: chunk.usage.totalTokens,
+              } : undefined,
+            };
+            res.write(`data: ${JSON.stringify(finalData)}\n\n`);
+          }
         }
 
         if (!clientClosed) {
-          const finalData = {
-            id: requestId,
-            object: 'chat.completion.chunk',
-            created: Math.floor(Date.now() / 1000),
-            model: normalizedModel,
-            choices: [
-              {
-                index: 0,
-                delta: {},
-                finish_reason: 'stop',
-              },
-            ],
-          };
-          res.write(`data: ${JSON.stringify(finalData)}\n\n`);
           res.write('data: [DONE]\n\n');
-
           keyManager.markKeySuccess(apiKey);
         }
       } catch (streamError: any) {
@@ -638,41 +669,43 @@ router.post('/v1/completions', async (req: Request, res: Response) => {
         for await (const chunk of result.stream) {
           if (clientClosed) break;
 
-          const data = {
-            id: requestId,
-            object: 'text_completion',
-            created: Math.floor(Date.now() / 1000),
-            model: normalizedModel,
-            choices: [
-              {
-                text: chunk,
-                index: 0,
-                logprobs: null,
-                finish_reason: null,
-              },
-            ],
-          };
-          res.write(`data: ${JSON.stringify(data)}\n\n`);
+          if (chunk.type === 'text') {
+            const data = {
+              id: requestId,
+              object: 'text_completion',
+              created: Math.floor(Date.now() / 1000),
+              model: normalizedModel,
+              choices: [
+                {
+                  text: chunk.content || '',
+                  index: 0,
+                  logprobs: null,
+                  finish_reason: null,
+                },
+              ],
+            };
+            res.write(`data: ${JSON.stringify(data)}\n\n`);
+          } else if (chunk.type === 'done') {
+            const finalData = {
+              id: requestId,
+              object: 'text_completion',
+              created: Math.floor(Date.now() / 1000),
+              model: normalizedModel,
+              choices: [
+                {
+                  text: '',
+                  index: 0,
+                  logprobs: null,
+                  finish_reason: 'stop',
+                },
+              ],
+            };
+            res.write(`data: ${JSON.stringify(finalData)}\n\n`);
+          }
         }
 
         if (!clientClosed) {
-          const finalData = {
-            id: requestId,
-            object: 'text_completion',
-            created: Math.floor(Date.now() / 1000),
-            model: normalizedModel,
-            choices: [
-              {
-                text: '',
-                index: 0,
-                logprobs: null,
-                finish_reason: 'stop',
-              },
-            ],
-          };
-          res.write(`data: ${JSON.stringify(finalData)}\n\n`);
           res.write('data: [DONE]\n\n');
-
           keyManager.markKeySuccess(apiKey);
         }
       } catch (streamError: any) {
