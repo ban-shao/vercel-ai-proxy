@@ -1,142 +1,240 @@
 /**
  * 定时任务调度器
- * 支持每日自动执行密钥管理任务
+ * 支持每日自动执行刷新和检查任务
  */
 
+import fs from 'fs';
 import { config } from './config';
 import { logger } from './logger';
-import { runDailyTask } from './daily-task';
+import { keyManager } from './key-manager';
+import { billingChecker } from './billing-checker';
+import { keyRefresher } from './key-refresher';
 
-interface SchedulerOptions {
-  /** 每日执行时间，格式: "HH:MM"，默认 "00:00" */
-  dailyTime?: string;
-  /** 是否启用调度器 */
-  enabled?: boolean;
-}
-
-class Scheduler {
-  private dailyTimer: NodeJS.Timeout | null = null;
-  private enabled: boolean;
-  private dailyTime: { hour: number; minute: number };
-
-  constructor(options: SchedulerOptions = {}) {
-    this.enabled = options.enabled ?? (process.env.SCHEDULER_ENABLED === 'true');
-
-    // 解析每日执行时间
-    const timeStr = options.dailyTime || process.env.DAILY_TASK_TIME || '00:00';
-    const [hour, minute] = timeStr.split(':').map(Number);
-    this.dailyTime = {
-      hour: isNaN(hour) ? 0 : hour,
-      minute: isNaN(minute) ? 0 : minute,
-    };
-  }
+export class Scheduler {
+  private dailyTaskTimer: NodeJS.Timeout | null = null;
+  private isRunning = false;
 
   /**
-   * 启动调度器
+   * 启动定时任务调度器
    */
-  start(): void {
-    if (!this.enabled) {
-      logger.info('[Scheduler] 定时任务调度器已禁用');
-      logger.info('[Scheduler] 设置 SCHEDULER_ENABLED=true 环境变量以启用');
+  start() {
+    if (!config.enableScheduler) {
+      logger.info('定时任务调度器已禁用');
       return;
     }
 
-    logger.info('[Scheduler] 定时任务调度器已启动');
-    logger.info(`[Scheduler] 每日任务执行时间: ${this.dailyTime.hour.toString().padStart(2, '0')}:${this.dailyTime.minute.toString().padStart(2, '0')}`);
+    logger.info('╔' + '═'.repeat(58) + '╗');
+    logger.info('║' + '  定时任务调度器已启动'.padStart(35).padEnd(58) + '║');
+    logger.info('║' + `  每日执行时间: ${config.dailyTaskTime}`.padStart(35).padEnd(58) + '║');
+    logger.info('╚' + '═'.repeat(58) + '╝');
 
-    this.scheduleDailyTask();
+    // 计算下次执行时间
+    this.scheduleNextRun();
   }
 
   /**
-   * 停止调度器
+   * 停止定时任务调度器
    */
-  stop(): void {
-    if (this.dailyTimer) {
-      clearTimeout(this.dailyTimer);
-      this.dailyTimer = null;
+  stop() {
+    if (this.dailyTaskTimer) {
+      clearTimeout(this.dailyTaskTimer);
+      this.dailyTaskTimer = null;
     }
-    logger.info('[Scheduler] 定时任务调度器已停止');
+    logger.info('定时任务调度器已停止');
   }
 
   /**
-   * 安排每日任务
+   * 计算并安排下次执行
    */
-  private scheduleDailyTask(): void {
+  private scheduleNextRun() {
+    const [hours, minutes] = config.dailyTaskTime.split(':').map(Number);
     const now = new Date();
-    const nextRun = new Date(
-      now.getFullYear(),
-      now.getMonth(),
-      now.getDate(),
-      this.dailyTime.hour,
-      this.dailyTime.minute,
-      0,
-      0
-    );
+    const next = new Date();
 
-    // 如果今天的时间已过，安排到明天
-    if (nextRun <= now) {
-      nextRun.setDate(nextRun.getDate() + 1);
+    next.setHours(hours, minutes, 0, 0);
+
+    // 如果今天的时间已过，安排明天
+    if (next <= now) {
+      next.setDate(next.getDate() + 1);
     }
 
-    const delay = nextRun.getTime() - now.getTime();
-    const hoursUntil = Math.floor(delay / 1000 / 60 / 60);
-    const minutesUntil = Math.floor((delay / 1000 / 60) % 60);
+    const delay = next.getTime() - now.getTime();
+    const hoursUntil = Math.floor(delay / (1000 * 60 * 60));
+    const minutesUntil = Math.floor((delay % (1000 * 60 * 60)) / (1000 * 60));
 
-    logger.info(`[Scheduler] 下次执行时间: ${nextRun.toISOString()} (${hoursUntil}小时${minutesUntil}分钟后)`);
+    logger.info(`下次定时任务将在 ${hoursUntil}小时${minutesUntil}分钟 后执行 (${next.toLocaleString()})`);
 
-    this.dailyTimer = setTimeout(async () => {
-      logger.info('[Scheduler] 开始执行每日任务...');
-
-      try {
-        await runDailyTask();
-        logger.info('[Scheduler] 每日任务执行完成');
-      } catch (error: any) {
-        logger.error(`[Scheduler] 每日任务执行失败: ${error?.message}`);
-      }
-
-      // 安排下一次执行
-      this.scheduleDailyTask();
+    this.dailyTaskTimer = setTimeout(() => {
+      this.runDailyTask();
     }, delay);
   }
 
   /**
-   * 立即执行每日任务（手动触发）
+   * 执行每日任务
    */
-  async runNow(): Promise<void> {
-    logger.info('[Scheduler] 手动触发每日任务...');
-    await runDailyTask();
+  async runDailyTask(): Promise<{ refresh: boolean; check: boolean; reload: boolean }> {
+    if (this.isRunning) {
+      logger.warn('定时任务正在执行中，跳过本次执行');
+      return { refresh: false, check: false, reload: false };
+    }
+
+    this.isRunning = true;
+    const startTime = Date.now();
+
+    logger.info('');
+    logger.info('╔' + '═'.repeat(58) + '╗');
+    logger.info('║' + '  Vercel AI Proxy 每日定时任务'.padStart(35).padEnd(58) + '║');
+    logger.info('║' + `  ${new Date().toLocaleString()}`.padStart(35).padEnd(58) + '║');
+    logger.info('╚' + '═'.repeat(58) + '╝');
+    logger.info('');
+
+    const result = { refresh: false, check: false, reload: false };
+
+    try {
+      // 步骤1: 刷新密钥
+      logger.info('='.repeat(60));
+      logger.info('📍 步骤 1/3: 刷新所有密钥额度');
+      logger.info('='.repeat(60));
+
+      result.refresh = await this.runRefresh();
+
+      if (!result.refresh) {
+        logger.error('刷新失败，但继续执行检查...');
+      }
+
+      // 等待一会，让刷新生效
+      logger.info('');
+      logger.info('⏳ 等待 30 秒让额度刷新生效...');
+      await this.sleep(30000);
+
+      // 步骤2: 检查余额
+      logger.info('');
+      logger.info('='.repeat(60));
+      logger.info('📍 步骤 2/3: 检查所有密钥余额');
+      logger.info('='.repeat(60));
+
+      result.check = await this.runCheck();
+
+      // 步骤3: 通知代理热加载
+      logger.info('');
+      logger.info('='.repeat(60));
+      logger.info('📍 步骤 3/3: 热加载密钥');
+      logger.info('='.repeat(60));
+
+      result.reload = this.runReload();
+
+    } catch (error: any) {
+      logger.error(`每日任务执行出错: ${error.message}`);
+    } finally {
+      this.isRunning = false;
+
+      const elapsed = (Date.now() - startTime) / 1000;
+
+      logger.info('');
+      logger.info('╔' + '═'.repeat(58) + '╗');
+      logger.info('║' + '  ✅ 每日任务完成！'.padStart(35).padEnd(58) + '║');
+      logger.info('║' + `  总耗时: ${elapsed.toFixed(1)} 秒`.padStart(35).padEnd(58) + '║');
+      logger.info('╚' + '═'.repeat(58) + '╝');
+
+      // 安排下次执行
+      this.scheduleNextRun();
+    }
+
+    return result;
+  }
+
+  /**
+   * 执行刷新任务
+   */
+  async runRefresh(): Promise<boolean> {
+    try {
+      const apiKeys = this.loadKeys();
+      if (apiKeys.length === 0) {
+        logger.error('❌ 没有找到密钥');
+        return false;
+      }
+
+      logger.info(`读取到 ${apiKeys.length} 个密钥`);
+
+      const results = await keyRefresher.refreshAllKeys(apiKeys);
+      const success = results.filter((r) => r.status === 'success' || r.status === 'triggered').length;
+
+      logger.info(`✅ 刷新完成: ${success}/${apiKeys.length} 个密钥已触发`);
+      return true;
+    } catch (error: any) {
+      logger.error(`❌ 刷新失败: ${error.message}`);
+      return false;
+    }
+  }
+
+  /**
+   * 执行检查任务
+   */
+  async runCheck(): Promise<boolean> {
+    try {
+      const apiKeys = this.loadKeys();
+      if (apiKeys.length === 0) {
+        logger.error('❌ 没有找到密钥');
+        return false;
+      }
+
+      const results = await billingChecker.checkMultipleKeys(apiKeys, 10);
+      billingChecker.generateReport(results);
+
+      const successful = results.filter((r) => r.status === 'success');
+      const highBalance = successful.filter((r) => (r.balance || 0) >= 3);
+
+      logger.info(`✅ 检查完成: ${successful.length}/${apiKeys.length} 个有效`);
+      logger.info(`   高余额密钥($3+): ${highBalance.length} 个`);
+
+      return true;
+    } catch (error: any) {
+      logger.error(`❌ 检查失败: ${error.message}`);
+      return false;
+    }
+  }
+
+  /**
+   * 执行热加载
+   */
+  runReload(): boolean {
+    try {
+      keyManager.reload();
+      logger.info('✅ 密钥已重新加载');
+      return true;
+    } catch (error: any) {
+      logger.error(`❌ 热加载失败: ${error.message}`);
+      return false;
+    }
+  }
+
+  /**
+   * 加载密钥文件
+   */
+  private loadKeys(): string[] {
+    // 优先使用 total_keys.txt
+    const keysDir = require('path').dirname(config.keysFile);
+    const totalKeysFile = require('path').join(keysDir, 'total_keys.txt');
+
+    let keysFile = config.keysFile;
+    if (fs.existsSync(totalKeysFile)) {
+      keysFile = totalKeysFile;
+    }
+
+    if (!fs.existsSync(keysFile)) {
+      return [];
+    }
+
+    const content = fs.readFileSync(keysFile, 'utf-8');
+    return content
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith('#'));
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }
 
-// 导出单例
 export const scheduler = new Scheduler();
-
-// 支持直接运行（立即执行一次）
-if (require.main === module) {
-  const args = process.argv.slice(2);
-
-  if (args.includes('--daemon') || args.includes('-d')) {
-    // 守护进程模式：启动调度器
-    const s = new Scheduler({ enabled: true });
-    s.start();
-
-    // 保持进程运行
-    process.on('SIGINT', () => {
-      s.stop();
-      process.exit(0);
-    });
-
-    process.on('SIGTERM', () => {
-      s.stop();
-      process.exit(0);
-    });
-  } else {
-    // 默认：立即执行一次
-    runDailyTask().then(() => {
-      process.exit(0);
-    }).catch((error) => {
-      logger.error('执行失败:', error);
-      process.exit(1);
-    });
-  }
-}
