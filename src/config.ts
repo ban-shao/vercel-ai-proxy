@@ -36,4 +36,8 @@ export const config = {
 
   logLevel: process.env.LOG_LEVEL || 'info',
   logDir: process.env.LOG_DIR || './logs',
+
+  // 定时任务配置
+  enableScheduler: process.env.ENABLE_SCHEDULER !== 'false', // 默认启用
+  dailyTaskTime: process.env.DAILY_TASK_TIME || '00:00', // 每日任务执行时间 (HH:mm)
 };

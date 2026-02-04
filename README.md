@@ -10,6 +10,9 @@
 - 🔑 **密钥池管理** - 支持多密钥轮换、故障转移、自动冷却
 - 🌊 **流式响应** - 完整支持 SSE 流式输出
 - 📊 **模型列表** - 优先从上游获取模型列表；失败时回退到内置列表
+- 💰 **余额检查** - 批量检查密钥余额，自动筛选有效密钥
+- ⏰ **定时刷新** - 每日自动刷新额度、检查余额、更新密钥列表
+- 📁 **密钥分类** - 按余额自动分类保存（高余额优先使用）
 
 ## ⚠️ 关于“为什么还是 /v1/chat/completions，而不是 /v1/ai/language-model？”
 
@@ -89,6 +92,10 @@ KEY_COOLDOWN_HOURS=24
 
 # 日志级别 (debug/info/warn/error)
 LOG_LEVEL=info
+
+# 定时任务配置
+ENABLE_SCHEDULER=true        # 是否启用定时任务
+DAILY_TASK_TIME=00:00        # 每日任务执行时间 (HH:mm)
 ```
 
 ### 添加 API 密钥
@@ -100,6 +107,8 @@ vag_xxxxxxxxxxxx
 vag_yyyyyyyyyyyy
 vag_zzzzzzzzzzzz
 ```
+
+如果需要使用完整的密钥管理功能，建议将所有密钥放在 `data/keys/total_keys.txt` 中，系统会自动生成分类文件。
 
 ## 🚀 使用方法
 
@@ -114,6 +123,52 @@ vag_zzzzzzzzzzzz
 | `/health` | GET | 健康检查 |
 | `/status` | GET | 密钥池状态 |
 | `/stats` | GET | 统计信息 |
+
+### 管理端点
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/admin/status` | GET | 获取详细密钥状态 |
+| `/admin/reload` | POST | 重新加载密钥文件 |
+| `/admin/reset` | POST | 重置所有密钥状态 |
+| `/admin/check` | POST | 执行余额检查 |
+| `/admin/refresh` | POST | 执行密钥刷新 |
+| `/admin/daily-task` | POST | 手动触发每日任务 |
+
+## 📁 密钥文件结构
+
+```
+data/keys/
+├── total_keys.txt      # 原始密钥（手动维护）
+├── active_keys.txt     # 有效密钥（自动生成，余额>0）
+├── keys_high.txt       # $3+ 高余额（优先使用）
+├── keys_medium_high.txt # $2-3 中高余额
+├── keys_medium.txt     # $1-2 中余额
+├── keys_low.txt        # $0-1 低余额
+└── keys_zero.txt       # $0 无余额
+```
+
+## ⏰ 每日定时任务流程
+
+```
+00:00  ┌──────────────────┐
+       │ 1. 刷新所有密钥   │  触发额度刷新
+       └────────┬─────────┘
+               ↓ 等待30秒
+       ┌────────▼─────────┐
+       │ 2. 检查所有余额   │  按余额分类保存
+       └────────┬─────────┘
+               ↓
+       ┌────────▼─────────┐
+       │ 3. 生成分类文件   │
+       │ • keys_high.txt   │  $3+ 高余额
+       │ • keys_medium.txt │  $1-3 中余额
+       └────────┬─────────┘
+               ↓
+       ┌────────▼─────────┐
+       │ 4. 热加载密钥列表 │  自动使用高余额密钥
+       └──────────────────┘
+```
 
 ## 📝 请求格式
 

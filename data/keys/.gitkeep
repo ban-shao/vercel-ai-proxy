@@ -1,0 +1,10 @@
+# 此目录用于存放密钥文件
+# 
+# 文件说明:
+# - total_keys.txt: 所有密钥（手动维护）
+# - active_keys.txt: 有效密钥（自动生成）
+# - keys_high.txt: $3+ 高余额密钥（自动生成）
+# - keys_medium_high.txt: $2-3 中高余额（自动生成）
+# - keys_medium.txt: $1-2 中余额（自动生成）
+# - keys_low.txt: $0-1 低余额（自动生成）
+# - keys_zero.txt: $0 无余额（自动生成）

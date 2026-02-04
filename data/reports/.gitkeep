@@ -1,0 +1,5 @@
+# 此目录用于存放报告文件
+#
+# 文件说明:
+# - billing_report.json: 余额检查报告
+# - refresh_report.json: 刷新任务报告

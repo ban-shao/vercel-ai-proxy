@@ -15,16 +15,37 @@ class KeyManager {
 
   private loadKeys() {
     try {
-      if (!fs.existsSync(config.keysFile)) {
-        logger.warn(`密钥文件不存在: ${config.keysFile}`);
-        return;
+      // 按优先级查找密钥文件
+      const keysDir = require('path').dirname(config.keysFile);
+      const keyFiles = [
+        require('path').join(keysDir, 'keys_high.txt'),      // 优先使用高余额
+        require('path').join(keysDir, 'active_keys.txt'),    // 其次有效密钥
+        config.keysFile,                                      // 最后默认文件
+      ];
+
+      let loadedFile: string | null = null;
+      let keyLines: string[] = [];
+
+      for (const file of keyFiles) {
+        if (fs.existsSync(file)) {
+          const content = fs.readFileSync(file, 'utf-8');
+          const lines = content
+            .split('\n')
+            .map((line) => line.trim())
+            .filter((line) => line && !line.startsWith('#'));
+          
+          if (lines.length > 0) {
+            keyLines = lines;
+            loadedFile = file;
+            break;
+          }
+        }
       }
 
-      const content = fs.readFileSync(config.keysFile, 'utf-8');
-      const keyLines = content
-        .split('\n')
-        .map((line) => line.trim())
-        .filter((line) => line && !line.startsWith('#'));
+      if (!loadedFile || keyLines.length === 0) {
+        logger.warn(`密钥文件不存在或为空`);
+        return;
+      }
 
       // 保留现有密钥状态
       const existingKeys = new Map(this.keys.map((k) => [k.key, k]));
@@ -35,7 +56,7 @@ class KeyManager {
       });
 
       this.lastLoadTime = Date.now();
-      logger.info(`已加载 ${this.keys.length} 个密钥`);
+      logger.info(`已从 ${require('path').basename(loadedFile)} 加载 ${this.keys.length} 个密钥`);
     } catch (error) {
       logger.error('加载密钥失败:', error);
     }
@@ -45,6 +66,13 @@ class KeyManager {
     if (Date.now() - this.lastLoadTime > this.RELOAD_INTERVAL) {
       this.loadKeys();
     }
+  }
+
+  /**
+   * 手动重新加载密钥
+   */
+  reload() {
+    this.loadKeys();
   }
 
   getNextKey(): string | null {
@@ -104,6 +132,36 @@ class KeyManager {
       available,
       inCooldown: this.keys.length - available,
     };
+  }
+
+  /**
+   * 获取详细状态（用于管理端点）
+   */
+  getDetailedStats() {
+    const now = new Date();
+    return {
+      total: this.keys.length,
+      available: this.keys.filter((k) => !k.cooldownUntil || k.cooldownUntil <= now).length,
+      inCooldown: this.keys.filter((k) => k.cooldownUntil && k.cooldownUntil > now).length,
+      keys: this.keys.map((k) => ({
+        keyShort: `${k.key.slice(0, 10)}...${k.key.slice(-4)}`,
+        failCount: k.failCount,
+        inCooldown: k.cooldownUntil ? k.cooldownUntil > now : false,
+        cooldownUntil: k.cooldownUntil?.toISOString(),
+        lastUsed: k.usedAt?.toISOString(),
+      })),
+    };
+  }
+
+  /**
+   * 重置所有密钥状态
+   */
+  resetAll() {
+    for (const key of this.keys) {
+      key.failCount = 0;
+      key.cooldownUntil = undefined;
+    }
+    logger.info('已重置所有密钥状态');
   }
 }
 

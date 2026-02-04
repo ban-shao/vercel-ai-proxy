@@ -5,7 +5,12 @@ import { logger } from './logger';
 import { keyManager } from './key-manager';
 import { chatCompletion, ensureGatewayModelId } from './ai-provider';
 import { getSupportedModels } from './utils';
+import { billingChecker } from './billing-checker';
+import { keyRefresher } from './key-refresher';
+import { scheduler } from './scheduler';
 import type { ChatCompletionRequest } from './types';
+import fs from 'fs';
+import path from 'path';
 
 export const router = Router();
 
@@ -25,12 +30,13 @@ function shouldCooldownKeyByErrorMessage(message?: string): boolean {
 router.get('/health', (req: Request, res: Response) => {
   res.json({
     status: 'ok',
-    version: '1.0.1',
+    version: '1.1.0',
     upstream: {
       openai: config.upstreamOpenAIBaseUrl,
       ai_sdk: config.upstreamAiSdkBaseUrl,
     },
     keys: keyManager.getStats(),
+    scheduler: config.enableScheduler ? 'enabled' : 'disabled',
   });
 });
 
@@ -51,6 +57,192 @@ router.get('/stats', (req: Request, res: Response) => {
     keys: keyManager.getStats(),
   });
 });
+
+// ==================== 管理端点 ====================
+
+/**
+ * GET /admin/status - 获取详细密钥状态
+ */
+router.get('/admin/status', (req: Request, res: Response) => {
+  res.json({
+    keys: keyManager.getDetailedStats(),
+    scheduler: {
+      enabled: config.enableScheduler,
+      dailyTaskTime: config.dailyTaskTime,
+    },
+  });
+});
+
+/**
+ * POST /admin/reload - 重新加载密钥文件
+ */
+router.post('/admin/reload', (req: Request, res: Response) => {
+  try {
+    keyManager.reload();
+    const stats = keyManager.getStats();
+    res.json({
+      success: true,
+      message: `已重新加载 ${stats.total} 个密钥`,
+      stats,
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+/**
+ * POST /admin/reset - 重置所有密钥状态
+ */
+router.post('/admin/reset', (req: Request, res: Response) => {
+  try {
+    keyManager.resetAll();
+    res.json({
+      success: true,
+      message: '已重置所有密钥状态',
+      stats: keyManager.getStats(),
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+/**
+ * POST /admin/check - 执行余额检查
+ */
+router.post('/admin/check', async (req: Request, res: Response) => {
+  try {
+    // 加载密钥
+    const keysDir = path.dirname(config.keysFile);
+    const totalKeysFile = path.join(keysDir, 'total_keys.txt');
+    let keysFile = config.keysFile;
+    
+    if (fs.existsSync(totalKeysFile)) {
+      keysFile = totalKeysFile;
+    }
+
+    if (!fs.existsSync(keysFile)) {
+      return res.status(400).json({
+        success: false,
+        error: '密钥文件不存在',
+      });
+    }
+
+    const content = fs.readFileSync(keysFile, 'utf-8');
+    const apiKeys = content
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith('#'));
+
+    if (apiKeys.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: '密钥文件为空',
+      });
+    }
+
+    // 异步执行检查
+    res.json({
+      success: true,
+      message: `开始检查 ${apiKeys.length} 个密钥，请稍后查看日志`,
+      keysCount: apiKeys.length,
+    });
+
+    // 后台执行
+    const results = await billingChecker.checkMultipleKeys(apiKeys, 10);
+    billingChecker.generateReport(results);
+    keyManager.reload();
+  } catch (error: any) {
+    if (!res.headersSent) {
+      res.status(500).json({
+        success: false,
+        error: error.message,
+      });
+    }
+  }
+});
+
+/**
+ * POST /admin/refresh - 执行密钥刷新
+ */
+router.post('/admin/refresh', async (req: Request, res: Response) => {
+  try {
+    // 加载密钥
+    const keysDir = path.dirname(config.keysFile);
+    const totalKeysFile = path.join(keysDir, 'total_keys.txt');
+    let keysFile = config.keysFile;
+    
+    if (fs.existsSync(totalKeysFile)) {
+      keysFile = totalKeysFile;
+    }
+
+    if (!fs.existsSync(keysFile)) {
+      return res.status(400).json({
+        success: false,
+        error: '密钥文件不存在',
+      });
+    }
+
+    const content = fs.readFileSync(keysFile, 'utf-8');
+    const apiKeys = content
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith('#'));
+
+    if (apiKeys.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: '密钥文件为空',
+      });
+    }
+
+    // 异步执行刷新
+    res.json({
+      success: true,
+      message: `开始刷新 ${apiKeys.length} 个密钥，请稍后查看日志`,
+      keysCount: apiKeys.length,
+    });
+
+    // 后台执行
+    await keyRefresher.refreshAllKeys(apiKeys);
+  } catch (error: any) {
+    if (!res.headersSent) {
+      res.status(500).json({
+        success: false,
+        error: error.message,
+      });
+    }
+  }
+});
+
+/**
+ * POST /admin/daily-task - 手动触发每日任务
+ */
+router.post('/admin/daily-task', async (req: Request, res: Response) => {
+  try {
+    res.json({
+      success: true,
+      message: '开始执行每日任务，请稍后查看日志',
+    });
+
+    // 后台执行
+    await scheduler.runDailyTask();
+  } catch (error: any) {
+    if (!res.headersSent) {
+      res.status(500).json({
+        success: false,
+        error: error.message,
+      });
+    }
+  }
+});
+
+// ==================== 模型端点 ====================
 
 /**
  * GET /v1/models - 获取模型列表

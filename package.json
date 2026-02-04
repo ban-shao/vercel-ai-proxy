@@ -1,14 +1,17 @@
 {
   "name": "vercel-ai-proxy",
-  "version": "1.0.1",
-  "description": "Vercel AI Gateway 代理服务 - 使用官方 AI SDK Gateway",
+  "version": "1.1.0",
+  "description": "Vercel AI Gateway 代理服务 - 使用官方 AI SDK Gateway，支持密钥池管理、余额检查、定时刷新",
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
     "lint": "eslint src/",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "check": "tsx src/cli/check.ts",
+    "refresh": "tsx src/cli/refresh.ts",
+    "daily-task": "tsx src/cli/daily-task.ts"
   },
   "dependencies": {
     "@ai-sdk/gateway": "^1.0.0",
