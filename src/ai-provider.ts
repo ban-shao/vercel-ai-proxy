@@ -212,12 +212,23 @@ function extractTokenCount(value: any): number {
   return 0;
 }
 
+// 流式响应结果类型
+export interface StreamResult {
+  stream: AsyncIterable<StreamChunk>;
+}
+
+export interface StreamChunk {
+  type: 'text' | 'reasoning' | 'done';
+  content?: string;
+  usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
+}
+
 // 主要的聊天完成函数
 export async function chatCompletion(
   request: ChatCompletionRequest,
   apiKey: string,
 ): Promise<{
-  stream?: AsyncIterable<string>;
+  stream?: AsyncIterable<StreamChunk>;
   text?: string;
   reasoning?: string;
   usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
@@ -274,7 +285,44 @@ export async function chatCompletion(
   // 流式或非流式
   if (request.stream) {
     const result = await streamText(params);
-    return { stream: result.textStream };
+    
+    // 创建一个生成器来处理流式响应
+    async function* processStream(): AsyncIterable<StreamChunk> {
+      let reasoningContent = '';
+      let textContent = '';
+      
+      // 使用 fullStream 来获取完整的流式数据（包括思考内容）
+      for await (const part of result.fullStream) {
+        if (part.type === 'reasoning') {
+          // 思考内容
+          reasoningContent += part.textDelta || '';
+          yield { type: 'reasoning', content: part.textDelta || '' };
+        } else if (part.type === 'text-delta') {
+          // 正常文本内容
+          textContent += part.textDelta || '';
+          yield { type: 'text', content: part.textDelta || '' };
+        } else if (part.type === 'finish') {
+          // 流结束，返回 usage
+          const rawUsage = (part as any).usage;
+          if (rawUsage) {
+            const promptTokens = extractTokenCount(rawUsage.promptTokens ?? rawUsage.inputTokens);
+            const completionTokens = extractTokenCount(rawUsage.completionTokens ?? rawUsage.outputTokens);
+            yield {
+              type: 'done',
+              usage: {
+                promptTokens,
+                completionTokens,
+                totalTokens: promptTokens + completionTokens,
+              },
+            };
+          } else {
+            yield { type: 'done' };
+          }
+        }
+      }
+    }
+    
+    return { stream: processStream() };
   }
 
   const result = await generateText(params);
