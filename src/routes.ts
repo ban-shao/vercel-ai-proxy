@@ -27,13 +27,42 @@ function shouldCooldownKeyByErrorMessage(message?: string): boolean {
 // 确保 reasoning_content 是字符串格式
 function normalizeReasoningContent(reasoning: any): string | undefined {
   if (!reasoning) return undefined;
+  
+  // 已经是字符串
   if (typeof reasoning === 'string') return reasoning;
+  
+  // 数组格式 - 可能是 [{type: 'thinking', text: '...'}, ...]
   if (Array.isArray(reasoning)) {
-    // 如果是数组，拼接成字符串
-    return reasoning.filter(Boolean).join('\n') || undefined;
+    const texts: string[] = [];
+    for (const item of reasoning) {
+      if (typeof item === 'string') {
+        texts.push(item);
+      } else if (item && typeof item === 'object') {
+        // 提取 text、content、thinking 等字段
+        const text = item.text || item.content || item.thinking || item.value;
+        if (typeof text === 'string') {
+          texts.push(text);
+        }
+      }
+    }
+    return texts.length > 0 ? texts.join('\n') : undefined;
   }
-  // 其他情况尝试转字符串
-  return String(reasoning);
+  
+  // 对象格式 - 可能是 {text: '...'} 或 {content: '...'}
+  if (typeof reasoning === 'object') {
+    // 尝试提取常见字段
+    const text = reasoning.text || reasoning.content || reasoning.thinking || reasoning.value;
+    if (typeof text === 'string') {
+      return text;
+    }
+    // 如果有 toString 方法且不是默认的 [object Object]
+    const str = JSON.stringify(reasoning);
+    if (str && str !== '{}') {
+      return str;
+    }
+  }
+  
+  return undefined;
 }
 
 /**
