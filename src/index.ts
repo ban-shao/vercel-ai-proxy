@@ -1,27 +1,35 @@
 import { config } from './config';
-import { createServer } from './server';
 import { logger } from './logger';
-import { keyManager } from './key-manager';
+import { createServer } from './server';
+import { scheduler } from './scheduler';
 
 async function main() {
-  logger.info('============================================================');
-  logger.info('Vercel AI Proxy - v1.0.1 (TypeScript + AI SDK Gateway)');
-  logger.info('============================================================');
-  logger.info(`监听端口: ${config.port}`);
-  logger.info(`上游 Host: ${config.upstreamUrl}`);
-  logger.info(`上游 OpenAI Compatible Base: ${config.upstreamOpenAIBaseUrl}`);
-  logger.info(`上游 AI SDK Base: ${config.upstreamAiSdkBaseUrl}`);
-  logger.info(`已加载密钥: ${keyManager.getStats().total} 个`);
-  logger.info('============================================================');
+  logger.info('Starting Vercel AI Proxy...');
+  logger.info(`Version: 1.1.0`);
+  logger.info(`Port: ${config.port}`);
+  logger.info(`Upstream: ${config.upstreamUrl}`);
+  logger.info(`Keys file: ${config.keysFile}`);
+  logger.info(`Cooldown hours: ${config.cooldownHours}`);
+  logger.info(`Scheduler: ${config.enableScheduler ? 'enabled' : 'disabled'}`);
+  if (config.enableScheduler) {
+    logger.info(`Daily task time: ${config.dailyTaskTime}`);
+  }
 
   const app = createServer();
 
   app.listen(config.port, () => {
-    logger.info(`服务启动成功，监听端口 ${config.port}`);
+    logger.info(`Server is running on port ${config.port}`);
+    logger.info(`Health check: http://localhost:${config.port}/health`);
+    logger.info(`API endpoint: http://localhost:${config.port}/v1/chat/completions`);
+    
+    // 启动定时任务调度器
+    if (config.enableScheduler) {
+      scheduler.start();
+    }
   });
 }
 
 main().catch((error) => {
-  logger.error('启动失败:', error);
+  logger.error('Failed to start server:', error);
   process.exit(1);
 });
