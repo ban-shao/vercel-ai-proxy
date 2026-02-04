@@ -24,6 +24,18 @@ function shouldCooldownKeyByErrorMessage(message?: string): boolean {
   return m.includes('rate') || m.includes('limit') || m.includes('quota') || m.includes('429');
 }
 
+// 确保 reasoning_content 是字符串格式
+function normalizeReasoningContent(reasoning: any): string | undefined {
+  if (!reasoning) return undefined;
+  if (typeof reasoning === 'string') return reasoning;
+  if (Array.isArray(reasoning)) {
+    // 如果是数组，拼接成字符串
+    return reasoning.filter(Boolean).join('\n') || undefined;
+  }
+  // 其他情况尝试转字符串
+  return String(reasoning);
+}
+
 /**
  * GET /health - 健康检查
  */
@@ -493,6 +505,9 @@ router.post('/v1/chat/completions', async (req: Request, res: Response) => {
     // 非流式响应
     const requestId = `chatcmpl-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 
+    // 处理 reasoning_content，确保是字符串
+    const reasoningContent = normalizeReasoningContent(result.reasoning);
+
     const response = {
       id: requestId,
       object: 'chat.completion',
@@ -504,7 +519,7 @@ router.post('/v1/chat/completions', async (req: Request, res: Response) => {
           message: {
             role: 'assistant',
             content: result.text || '',
-            ...(result.reasoning ? { reasoning_content: result.reasoning } : {}),
+            ...(reasoningContent ? { reasoning_content: reasoningContent } : {}),
           },
           finish_reason: 'stop',
         },
