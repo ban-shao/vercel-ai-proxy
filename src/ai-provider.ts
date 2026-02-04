@@ -3,7 +3,7 @@ import { config } from './config';
 import { logger } from './logger';
 import type { ChatCompletionRequest, ProviderType, Message } from './types';
 
-// 模型到 Provider 的映射（仅用于“简写模型名”的推断）
+// 模型到 Provider 的映射（仅用于"简写模型名"的推断）
 const MODEL_PROVIDER_MAP: Record<string, ProviderType> = {
   // Anthropic
   claude: 'anthropic',
@@ -260,10 +260,20 @@ export async function chatCompletion(
   }
 
   const result = await generateText(params);
+  
+  // 转换 usage 格式
+  const usage = result.usage ? {
+    promptTokens: (result.usage as any).promptTokens ?? (result.usage as any).inputTokens ?? 0,
+    completionTokens: (result.usage as any).completionTokens ?? (result.usage as any).outputTokens ?? 0,
+    totalTokens: (result.usage as any).totalTokens ?? 
+      ((result.usage as any).promptTokens ?? (result.usage as any).inputTokens ?? 0) + 
+      ((result.usage as any).completionTokens ?? (result.usage as any).outputTokens ?? 0),
+  } : undefined;
+
   return {
     text: result.text,
     reasoning: (result as any).reasoning,
-    usage: result.usage,
+    usage,
   };
 }
 
