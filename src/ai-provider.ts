@@ -339,8 +339,8 @@ export async function chatCompletion(
 
       // 使用 fullStream 来获取完整的流式数据（包括思考内容）
       for await (const part of result.fullStream) {
-        if (part.type === 'reasoning') {
-          // 思考内容
+        if (part.type === 'reasoning-delta') {
+          // 思考内容：fullStream 中使用 reasoning-* 事件，这里关心增量部分
           const delta =
             (part as any).textDelta ||
             (part as any).text ||
