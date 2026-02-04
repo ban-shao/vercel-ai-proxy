@@ -1,12 +1,34 @@
 #!/usr/bin/env tsx
 import 'dotenv/config';
+import fs from 'fs';
+import { config } from '../config.js';
 import { KeyRefresher } from '../key-refresher.js';
 
 async function main() {
   console.log('\n🔄 开始刷新密钥额度...\n');
+
+  const keysFile = config.keysFile;
+  
+  if (!fs.existsSync(keysFile)) {
+    console.error(`❌ 密钥文件不存在: ${keysFile}`);
+    process.exit(1);
+  }
+
+  const keys = fs.readFileSync(keysFile, 'utf-8')
+    .split('\n')
+    .map(k => k.trim())
+    .filter(k => k && !k.startsWith('#'));
+
+  if (keys.length === 0) {
+    console.error('❌ 没有找到有效密钥');
+    process.exit(1);
+  }
+
+  console.log(`📂 密钥文件: ${keysFile}`);
+  console.log(`🔑 密钥数量: ${keys.length}\n`);
   
   const refresher = new KeyRefresher();
-  await refresher.refreshAllKeys();
+  await refresher.refreshAllKeys(keys);
   
   console.log('\n✅ 刷新完成');
 }

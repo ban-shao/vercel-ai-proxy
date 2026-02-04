@@ -7,7 +7,7 @@ import { billingChecker } from '../billing-checker.js';
 async function main() {
   console.log('\n🔍 开始检查密钥余额...\n');
 
-  const keysFile = config.totalKeysFile || config.keysFile;
+  const keysFile = config.keysFile;
   
   if (!fs.existsSync(keysFile)) {
     console.error(`❌ 密钥文件不存在: ${keysFile}`);
