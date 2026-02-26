@@ -308,7 +308,7 @@ export async function chatCompletion(
     params.topP = request.top_p;
   }
 
-  // 透传其余字段（排除已经处理的字段）
+  // 透传其余字段（排除已经处理的字段和思考相关字段）
   const excludedKeys = new Set([
     'model',
     'messages',
@@ -316,6 +316,10 @@ export async function chatCompletion(
     'max_tokens',
     'temperature',
     'top_p',
+    'reasoning_effort',
+    'thinking',
+    'enable_thinking',
+    'thinking_budget',
   ]);
 
   for (const [key, value] of Object.entries(request)) {

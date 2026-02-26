@@ -14,6 +14,8 @@ type LogLevel = keyof typeof LOG_LEVELS;
 class Logger {
   private level: number;
   private logDir: string;
+  private currentLogDate: string = '';
+  private logStream: fs.WriteStream | null = null;
 
   constructor() {
     this.level = LOG_LEVELS[config.logLevel as LogLevel] ?? LOG_LEVELS.info;
@@ -23,6 +25,19 @@ class Logger {
     if (!fs.existsSync(this.logDir)) {
       fs.mkdirSync(this.logDir, { recursive: true });
     }
+  }
+
+  private getLogStream(): fs.WriteStream {
+    const today = new Date().toISOString().split('T')[0];
+    if (today !== this.currentLogDate || !this.logStream) {
+      if (this.logStream) {
+        this.logStream.end();
+      }
+      this.currentLogDate = today;
+      const logFile = path.join(this.logDir, `${today}.log`);
+      this.logStream = fs.createWriteStream(logFile, { flags: 'a' });
+    }
+    return this.logStream;
   }
 
   private formatMessage(level: string, message: string, ...args: any[]): string {
@@ -38,9 +53,8 @@ class Logger {
       const formatted = this.formatMessage(level, message, ...args);
       console.log(formatted);
       
-      // 写入文件
-      const logFile = path.join(this.logDir, `${new Date().toISOString().split('T')[0]}.log`);
-      fs.appendFileSync(logFile, formatted + '\n');
+      // 异步写入文件（使用 WriteStream，不阻塞事件循环）
+      this.getLogStream().write(formatted + '\n');
     }
   }
 
