@@ -262,6 +262,37 @@ function extractTokenCount(value: any): number {
   return 0;
 }
 
+/**
+ * 从流式事件中提取文本增量
+ * 兼容不同版本 AI SDK 的字段名差异：textDelta / delta / text
+ */
+function extractDelta(part: any): string {
+  return part.textDelta ?? part.delta ?? part.text ?? '';
+}
+
+/**
+ * 从 usage 对象中提取 token 使用信息
+ * 兼容不同版本 AI SDK 的字段名差异
+ */
+function extractUsage(rawUsage: any): {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+} | undefined {
+  if (!rawUsage) return undefined;
+
+  const promptTokens = extractTokenCount(
+    rawUsage.promptTokens ?? rawUsage.inputTokens,
+  );
+  const completionTokens = extractTokenCount(
+    rawUsage.completionTokens ?? rawUsage.outputTokens,
+  );
+  const totalTokens =
+    extractTokenCount(rawUsage.totalTokens) || promptTokens + completionTokens;
+
+  return { promptTokens, completionTokens, totalTokens };
+}
+
 // 流式响应结果类型
 export interface StreamResult {
   stream: AsyncIterable<StreamChunk>;
@@ -344,6 +375,17 @@ export async function chatCompletion(
     params.topP = request.top_p;
   }
 
+  // Anthropic 模型开启 thinking 时，必须设置 maxTokens
+  // 否则 Claude API 可能返回空内容或截断响应
+  if (
+    providerType === 'anthropic' &&
+    providerOptions?.anthropic?.thinking &&
+    !params.maxTokens
+  ) {
+    params.maxTokens = 16384;
+    logger.debug('Anthropic thinking 已启用但未设置 maxTokens，使用默认值 16384');
+  }
+
   // 透传其余字段（排除已经处理的字段和思考相关字段）
   const excludedKeys = new Set([
     'model',
@@ -370,93 +412,147 @@ export async function chatCompletion(
 
   // 流式或非流式
   if (request.stream) {
-    const result = await streamText(params);
+    const result = streamText(params);
 
     // 创建一个生成器来处理流式响应
     async function* processStream(): AsyncIterable<StreamChunk> {
       let reasoningContent = '';
       let textContent = '';
+      let doneEmitted = false;
 
-      // 使用 fullStream 来获取完整的流式数据（包括思考内容）
-      for await (const part of result.fullStream) {
-        if (part.type === 'reasoning-delta') {
-          // 思考内容：fullStream 中使用 reasoning-* 事件，这里关心增量部分
-          const delta =
-            (part as any).textDelta ||
-            (part as any).text ||
-            '';
-          if (!delta) continue;
+      try {
+        // 使用 fullStream 来获取完整的流式数据（包括思考内容）
+        for await (const part of result.fullStream) {
+          const type = part.type;
 
-          reasoningContent += delta;
-          yield { type: 'reasoning', content: delta };
-        } else if (part.type === 'text-delta') {
-          // 正常文本内容
-          const delta = (part as any).textDelta ?? '';
-          if (!delta) continue;
+          // 处理推理/思考事件
+          // AI SDK v4: type='reasoning', v5+: type='reasoning-delta'
+          if (type === 'reasoning-delta' || type === 'reasoning') {
+            const delta = extractDelta(part);
+            if (!delta) continue;
 
-          textContent += delta;
-          yield { type: 'text', content: delta };
-        } else if (part.type === 'finish') {
-          // 流结束，返回 usage
-          const rawUsage = (part as any).usage;
-          if (rawUsage) {
-            const promptTokens = extractTokenCount(
-              rawUsage.promptTokens ?? rawUsage.inputTokens,
-            );
-            const completionTokens = extractTokenCount(
-              rawUsage.completionTokens ?? rawUsage.outputTokens,
-            );
-            yield {
-              type: 'done',
-              usage: {
-                promptTokens,
-                completionTokens,
-                totalTokens: promptTokens + completionTokens,
-              },
-            };
-          } else {
-            yield { type: 'done' };
+            reasoningContent += delta;
+            yield { type: 'reasoning', content: delta };
+          }
+          // 处理正常文本事件
+          else if (type === 'text-delta') {
+            const delta = extractDelta(part);
+            if (!delta) continue;
+
+            textContent += delta;
+            yield { type: 'text', content: delta };
+          }
+          // 处理流结束事件
+          // AI SDK v4: 'finish', AI SDK v5+: 'finish' (totalUsage) 和 'finish-step' (usage)
+          else if (type === 'finish' || type === 'finish-step') {
+            // 避免重复发送 done 事件
+            if (doneEmitted) continue;
+
+            // v5+ 的 finish 事件使用 totalUsage，finish-step 使用 usage
+            const rawUsage = (part as any).usage || (part as any).totalUsage;
+            const usage = extractUsage(rawUsage);
+
+            if (usage) {
+              yield { type: 'done', usage };
+              doneEmitted = true;
+            }
+            // 如果是 finish 事件（最终事件），即使没有 usage 也要发 done
+            if (type === 'finish' && !doneEmitted) {
+              yield { type: 'done' };
+              doneEmitted = true;
+            }
           }
         }
+      } catch (error) {
+        // 流处理中的错误会在 routes.ts 的 catch 中处理
+        throw error;
+      } finally {
+        // 确保 done 事件始终被发送，即使流异常结束或没有 finish 事件
+        if (!doneEmitted) {
+          logger.warn('流结束但未收到 finish 事件，强制发送 done');
+          yield { type: 'done' };
+        }
+      }
+
+      // 记录流式响应统计
+      if (!textContent && reasoningContent) {
+        logger.info(`流式响应: 模型仅返回推理内容 (${reasoningContent.length} 字符)，无正文文本`);
+      } else if (!textContent && !reasoningContent) {
+        logger.warn(`流式响应: 模型未返回任何文本和推理内容，模型: ${modelId}`);
       }
     }
 
     return { stream: processStream() };
   }
 
+  // 非流式响应
   const result = await generateText(params);
 
-  // 转换 usage 格式，处理嵌套对象
-  let usage:
-    | {
-        promptTokens: number;
-        completionTokens: number;
-        totalTokens: number;
+  // 提取文本 - 兼容不同版本 AI SDK
+  let text = result.text || '';
+
+  // 如果 text 为空，尝试从 result.content 数组提取（AI SDK v5+）
+  if (!text) {
+    const content = (result as any).content;
+    if (Array.isArray(content)) {
+      text = content
+        .filter((p: any) => p.type === 'text')
+        .map((p: any) => p.text || '')
+        .join('');
+
+      if (text) {
+        logger.debug('从 result.content 数组中提取到文本内容');
       }
-    | undefined;
+    }
+  }
 
-  if (result.usage) {
-    const rawUsage = result.usage as any;
-    const promptTokens = extractTokenCount(
-      rawUsage.promptTokens ?? rawUsage.inputTokens,
-    );
-    const completionTokens = extractTokenCount(
-      rawUsage.completionTokens ?? rawUsage.outputTokens,
-    );
-    const totalTokens =
-      extractTokenCount(rawUsage.totalTokens) ||
-      promptTokens + completionTokens;
+  // 提取推理内容 - 优先使用 reasoningText（字符串），其次是 reasoning
+  let reasoning: string | undefined;
 
-    usage = {
-      promptTokens,
-      completionTokens,
-      totalTokens,
-    };
+  // AI SDK v5+: reasoningText 是字符串格式
+  const reasoningText = (result as any).reasoningText;
+  if (typeof reasoningText === 'string' && reasoningText) {
+    reasoning = reasoningText;
+  } else {
+    // 尝试从 reasoning 字段获取（可能是字符串或 ReasoningDetail 数组）
+    const rawReasoning = (result as any).reasoning;
+    if (typeof rawReasoning === 'string') {
+      reasoning = rawReasoning;
+    } else if (Array.isArray(rawReasoning)) {
+      reasoning = rawReasoning
+        .filter((p: any) => p.type === 'text')
+        .map((p: any) => p.text || '')
+        .join('\n');
+      if (!reasoning) {
+        // 可能是简单字符串数组
+        reasoning = rawReasoning
+          .filter((p: any) => typeof p === 'string')
+          .join('\n');
+      }
+    }
+  }
+
+  // 转换 usage 格式
+  const usage = extractUsage(result.usage);
+
+  // 调试日志: 空响应
+  if (!text && usage && usage.completionTokens > 0) {
+    logger.warn(
+      `非流式响应文本为空，但消耗了 ${usage.completionTokens} 个 completion tokens，模型: ${modelId}`,
+    );
+    if (reasoning) {
+      logger.info('模型仅返回了推理内容，无正文文本');
+    }
+    // 打印 result 的可用字段帮助调试
+    const resultKeys = Object.keys(result).filter(
+      (k) => (result as any)[k] !== undefined && (result as any)[k] !== null,
+    );
+    logger.debug(`generateText result 可用字段: ${resultKeys.join(', ')}`);
   }
 
   return {
-    text: result.text,
-    reasoning: (result as any).reasoning,
+    text,
+    reasoning,
     usage,
   };
 }
