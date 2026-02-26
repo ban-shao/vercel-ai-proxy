@@ -89,9 +89,45 @@ function calculateThinkingBudget(effort: string, maxTokens?: number): number {
   return baseBudget;
 }
 
+/**
+ * 检查消息内容是否为空
+ */
+function isContentEmpty(content: any): boolean {
+  if (content === null || content === undefined) return true;
+  if (typeof content === 'string') return content.trim() === '';
+  if (Array.isArray(content)) {
+    if (content.length === 0) return true;
+    // 检查数组中是否所有元素的文本内容都为空
+    return content.every((part) => {
+      if (part.type === 'text') return !part.text || part.text.trim() === '';
+      // image_url 等非文本类型视为非空
+      return false;
+    });
+  }
+  return false;
+}
+
+/**
+ * 预处理消息数组，确保不会有空内容的消息发送到上游 API
+ * - Anthropic/Claude 不接受 content 为空的消息
+ * - 对空内容使用占位符 "." 保持对话结构完整
+ */
+function sanitizeMessages(messages: Message[]): Message[] {
+  return messages.map((msg) => {
+    if (isContentEmpty(msg.content)) {
+      logger.debug(`消息 role=${msg.role} 内容为空，使用占位符替代`);
+      return { ...msg, content: '.' };
+    }
+    return msg;
+  });
+}
+
 // 转换消息格式
 function convertMessages(messages: Message[]): CoreMessage[] {
-  return messages.map((msg) => {
+  // 先清理空内容消息
+  const sanitized = sanitizeMessages(messages);
+
+  return sanitized.map((msg) => {
     if (typeof msg.content === 'string') {
       return {
         role: msg.role,
@@ -288,7 +324,7 @@ export async function chatCompletion(
     logger.debug('ProviderOptions:', JSON.stringify(providerOptions));
   }
 
-  // 转换消息
+  // 转换消息（内部会自动清理空内容）
   const messages = convertMessages(request.messages);
 
   // 构建请求参数
