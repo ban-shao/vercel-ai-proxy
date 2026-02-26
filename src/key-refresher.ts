@@ -27,8 +27,8 @@ export interface RefreshSummary {
 }
 
 export class KeyRefresher {
-  private baseUrl = 'https://ai-gateway.vercel.sh/v1/chat/completions';
-  private model = 'anthropic/claude-3-haiku'; // 使用最便宜的模型
+  private get baseUrl() { return `${config.upstreamOpenAIBaseUrl}/chat/completions`; }
+  private model = 'anthropic/claude-3-5-haiku-20241022'; // 使用最便宜的模型
   private interval = 2000; // 每个密钥之间间隔毫秒数
 
   /**

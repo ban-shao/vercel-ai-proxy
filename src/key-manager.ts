@@ -1,4 +1,5 @@
 import fs from 'fs';
+import path from 'path';
 import { config } from './config';
 import { logger } from './logger';
 import { KeyStatus } from './types';
@@ -16,10 +17,10 @@ class KeyManager {
   private loadKeys() {
     try {
       // 按优先级查找密钥文件
-      const keysDir = require('path').dirname(config.keysFile);
+      const keysDir = path.dirname(config.keysFile);
       const keyFiles = [
-        require('path').join(keysDir, 'keys_high.txt'),      // 优先使用高余额
-        require('path').join(keysDir, 'active_keys.txt'),    // 其次有效密钥
+        path.join(keysDir, 'keys_high.txt'),      // 优先使用高余额
+        path.join(keysDir, 'active_keys.txt'),    // 其次有效密钥
         config.keysFile,                                      // 最后默认文件
       ];
 
@@ -56,7 +57,7 @@ class KeyManager {
       });
 
       this.lastLoadTime = Date.now();
-      logger.info(`已从 ${require('path').basename(loadedFile)} 加载 ${this.keys.length} 个密钥`);
+      logger.info(`已从 ${path.basename(loadedFile)} 加载 ${this.keys.length} 个密钥`);
     } catch (error) {
       logger.error('加载密钥失败:', error);
     }

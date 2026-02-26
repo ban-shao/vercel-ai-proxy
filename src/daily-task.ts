@@ -7,8 +7,8 @@ import fs from 'fs';
 import path from 'path';
 import { config } from './config';
 import { logger } from './logger';
-import { KeyRefresher } from './key-refresher';
-import { BillingChecker } from './billing-checker';
+import { keyRefresher } from './key-refresher';
+import { billingChecker } from './billing-checker';
 
 /**
  * 步骤1: 刷新所有密钥
@@ -44,8 +44,7 @@ async function runRefresh(): Promise<boolean> {
 
     logger.info(`读取到 ${apiKeys.length} 个密钥`);
 
-    const refresher = new KeyRefresher();
-    const results = await refresher.refreshAllKeys(apiKeys);
+    const results = await keyRefresher.refreshAllKeys(apiKeys);
 
     const success = results.filter((r) => r.status === 'success' || r.status === 'triggered').length;
     logger.info(`✅ 刷新完成: ${success}/${apiKeys.length} 个密钥已触发`);
@@ -82,9 +81,8 @@ async function runCheck(): Promise<boolean> {
       return false;
     }
 
-    const checker = new BillingChecker();
-    const results = await checker.checkMultipleKeys(apiKeys, 10);
-    checker.generateReport(results);
+    const results = await billingChecker.checkMultipleKeys(apiKeys, 10);
+    billingChecker.generateReport(results);
 
     // 统计
     const successful = results.filter((r) => r.status === 'success');

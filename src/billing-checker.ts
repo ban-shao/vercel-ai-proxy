@@ -36,7 +36,7 @@ export interface BillingSummary {
 }
 
 export class BillingChecker {
-  private baseUrl = 'https://ai-gateway.vercel.sh/v1';
+  private get baseUrl() { return config.upstreamOpenAIBaseUrl; }
 
   /**
    * 检查单个密钥的余额

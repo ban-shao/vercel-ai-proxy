@@ -447,10 +447,6 @@ router.post('/v1/chat/completions', async (req: Request, res: Response) => {
         clientClosed = true;
       });
 
-      // 收集思考内容和文本内容
-      let reasoningContent = '';
-      let hasStartedText = false;
-
       try {
         // 兼容性：部分 OpenAI 生态客户端要求首包带 role
         const roleData = {
@@ -473,7 +469,6 @@ router.post('/v1/chat/completions', async (req: Request, res: Response) => {
 
           if (chunk.type === 'reasoning') {
             // 思考内容 - 发送到 reasoning_content 字段
-            reasoningContent += chunk.content || '';
             const data = {
               id: requestId,
               object: 'chat.completion.chunk',
@@ -490,7 +485,6 @@ router.post('/v1/chat/completions', async (req: Request, res: Response) => {
             res.write(`data: ${JSON.stringify(data)}\n\n`);
           } else if (chunk.type === 'text') {
             // 正常文本内容
-            hasStartedText = true;
             const data = {
               id: requestId,
               object: 'chat.completion.chunk',
@@ -536,6 +530,11 @@ router.post('/v1/chat/completions', async (req: Request, res: Response) => {
       } catch (streamError: any) {
         if (!clientClosed) {
           logger.error('流式响应错误:', streamError?.message);
+
+          // 根据错误信息判断是否需要冷却密钥
+          if (shouldCooldownKeyByErrorMessage(streamError?.message)) {
+            keyManager.markKeyFailed(apiKey);
+          }
 
           // 尝试发送错误
           const errorData = {
@@ -711,6 +710,11 @@ router.post('/v1/completions', async (req: Request, res: Response) => {
       } catch (streamError: any) {
         if (!clientClosed) {
           logger.error('completions 流式响应错误:', streamError?.message);
+
+          // 根据错误信息判断是否需要冷却密钥
+          if (shouldCooldownKeyByErrorMessage(streamError?.message)) {
+            keyManager.markKeyFailed(apiKey);
+          }
         }
       }
 

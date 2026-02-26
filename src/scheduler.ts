@@ -4,6 +4,7 @@
  */
 
 import fs from 'fs';
+import path from 'path';
 import { config } from './config';
 import { logger } from './logger';
 import { keyManager } from './key-manager';
@@ -213,8 +214,8 @@ export class Scheduler {
    */
   private loadKeys(): string[] {
     // 优先使用 total_keys.txt
-    const keysDir = require('path').dirname(config.keysFile);
-    const totalKeysFile = require('path').join(keysDir, 'total_keys.txt');
+    const keysDir = path.dirname(config.keysFile);
+    const totalKeysFile = path.join(keysDir, 'total_keys.txt');
 
     let keysFile = config.keysFile;
     if (fs.existsSync(totalKeysFile)) {

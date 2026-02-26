@@ -11,7 +11,44 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction) 
     return next();
   }
 
-  // 未配置 AUTH_KEY 时不启用鉴权
+  // 对 /admin/* 路径强制要求鉴权，即使未配置 AUTH_KEY 也不放行
+  if (req.path.startsWith('/admin')) {
+    if (!config.authKey) {
+      logger.warn(`[AUTH] 未配置 AUTH_KEY，拒绝访问管理端点 - ${req.path} - ${req.ip}`);
+      return res.status(403).json({
+        error: {
+          message: 'Forbidden: Admin endpoints require AUTH_KEY to be configured',
+          type: 'auth_error',
+        },
+      });
+    }
+
+    const authHeader = req.headers.authorization;
+    if (!authHeader) {
+      logger.warn(`[AUTH] 缺少认证头 - ${req.ip}`);
+      return res.status(401).json({
+        error: {
+          message: 'Unauthorized: Missing Authorization header',
+          type: 'auth_error',
+        },
+      });
+    }
+
+    const token = authHeader.replace(/^Bearer\s+/i, '').trim();
+    if (token !== config.authKey) {
+      logger.warn(`[AUTH] 认证失败 - ${req.ip}`);
+      return res.status(401).json({
+        error: {
+          message: 'Unauthorized: Invalid API key',
+          type: 'auth_error',
+        },
+      });
+    }
+
+    return next();
+  }
+
+  // 未配置 AUTH_KEY 时，非管理端点不启用鉴权
   if (!config.authKey) {
     return next();
   }
