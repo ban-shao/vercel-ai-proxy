@@ -426,8 +426,7 @@ export async function chatCompletion(
           const type = part.type;
 
           // 处理推理/思考事件
-          // AI SDK v4: type='reasoning', v5+: type='reasoning-delta'
-          if (type === 'reasoning-delta' || type === 'reasoning') {
+          if (type === 'reasoning-delta') {
             const delta = extractDelta(part);
             if (!delta) continue;
 
@@ -443,7 +442,7 @@ export async function chatCompletion(
             yield { type: 'text', content: delta };
           }
           // 处理流结束事件
-          // AI SDK v4: 'finish', AI SDK v5+: 'finish' (totalUsage) 和 'finish-step' (usage)
+          // AI SDK v5+: 'finish' (totalUsage) 和 'finish-step' (usage)
           else if (type === 'finish' || type === 'finish-step') {
             // 避免重复发送 done 事件
             if (doneEmitted) continue;
